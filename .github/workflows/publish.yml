@@ -87,6 +87,7 @@ jobs:
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         env:
+          CARGO_INCREMENTAL: 0
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
@@ -103,6 +104,10 @@ jobs:
             echo "CRC failure detected, rebuilding wheels..."
             rm -rf dist target
             maturin build --release --out dist
+          fi
+          if ! python scripts/wheel_crc_check.py dist/*.whl; then
+            echo "CRC still failing after rebuild"
+            exit 1
           fi
       - name: Inspect wheels (pre-normalize)
         shell: bash
