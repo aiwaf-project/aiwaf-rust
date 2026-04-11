@@ -94,6 +94,7 @@ jobs:
           args: --release --out dist
           sccache: false
       - name: Zip integrity check
+        shell: bash
         run: python -m zipfile -t dist/*.whl
       - name: Verify wheels
         run: |
