@@ -71,6 +71,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        include:
+          - os: windows-latest
+            build_jobs: 1
+            rustflags: "-C codegen-units=1"
+          - os: ubuntu-latest
+            build_jobs: ""
+            rustflags: ""
+          - os: macos-latest
+            build_jobs: ""
+            rustflags: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -89,8 +99,8 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0
           CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
-          CARGO_BUILD_JOBS: ${{ matrix.os == 'windows-latest' && 1 || 0 }}
-          RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C codegen-units=1' || '' }}
+          CARGO_BUILD_JOBS: ${{ matrix.build_jobs }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
