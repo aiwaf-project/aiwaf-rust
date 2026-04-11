@@ -95,7 +95,9 @@ jobs:
           sccache: false
       - name: Zip integrity check
         shell: bash
-        run: python -m zipfile -t dist/*.whl
+        run: |
+          python -m zipfile -t dist/*.whl
+          python scripts/check_zip_trailing.py dist/*.whl
       - name: Verify wheels
         run: |
           python -m pip install -U twine
@@ -151,6 +153,10 @@ jobs:
       name: pypi
 
     steps:
+      - uses: actions/checkout@v4
+      - name: Clean dist
+        shell: bash
+        run: rm -rf dist
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
@@ -166,6 +172,13 @@ jobs:
       - name: Remove attestation files
         shell: bash
         run: rm -f dist/*.publish.attestation
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          python -m zipfile -t dist/*.whl
+          python scripts/check_zip_trailing.py dist/*.whl
+          python -m pip install -U twine
+          twine check dist/*
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
