@@ -176,6 +176,18 @@ maturin build --release --out dist
 maturin sdist --out dist
 ```
 
+### Build WASM package (npm)
+
+This repo also ships a WASM package with the same API surface as the Python module.
+
+```bash
+# from repo root
+cd crates/aiwaf_wasm
+wasm-pack build --release --target bundler
+```
+
+The npm package name is `aiwaf-wasm`. Use `wasm-pack publish` to publish after validating the build.
+
 ### Install from local artifacts
 
 ```bash

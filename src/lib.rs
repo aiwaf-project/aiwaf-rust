@@ -1,248 +1,64 @@
-use once_cell::sync::Lazy;
-use pyo3::exceptions::PyKeyError;
+use aiwaf_core::{
+    analyze_recent_behavior as core_analyze_recent_behavior,
+    extract_features as core_extract_features,
+    extract_features_batch_with_state as core_extract_features_batch_with_state,
+    finalize_feature_state as core_finalize_feature_state,
+    validate_headers as core_validate_headers,
+    validate_headers_with_config as core_validate_headers_with_config,
+    BehaviorAnalysis, Contamination, FeatureBatchResult, FeatureRecordInput,
+    FeatureRecordOutput, FeatureState, IsolationForest as CoreForest,
+    IsolationForestState, IsolationTreeState, MaxFeatures, MaxSamples,
+    RecentEntryInput,
+};
+use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
-use pyo3::FromPyObject;
-use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-static LEGITIMATE_BOTS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        Regex::new(r"googlebot").unwrap(),
-        Regex::new(r"bingbot").unwrap(),
-        Regex::new(r"slurp").unwrap(),
-        Regex::new(r"duckduckbot").unwrap(),
-        Regex::new(r"baiduspider").unwrap(),
-        Regex::new(r"yandexbot").unwrap(),
-        Regex::new(r"facebookexternalhit").unwrap(),
-        Regex::new(r"twitterbot").unwrap(),
-        Regex::new(r"linkedinbot").unwrap(),
-        Regex::new(r"whatsapp").unwrap(),
-        Regex::new(r"telegrambot").unwrap(),
-        Regex::new(r"applebot").unwrap(),
-        Regex::new(r"pingdom").unwrap(),
-        Regex::new(r"uptimerobot").unwrap(),
-        Regex::new(r"statuscake").unwrap(),
-        Regex::new(r"site24x7").unwrap(),
-    ]
-});
-
-static SUSPICIOUS_UA: Lazy<Vec<(&'static str, Regex)>> = Lazy::new(|| {
-    vec![
-        (r"bot", Regex::new(r"bot").unwrap()),
-        (r"crawler", Regex::new(r"crawler").unwrap()),
-        (r"spider", Regex::new(r"spider").unwrap()),
-        (r"scraper", Regex::new(r"scraper").unwrap()),
-        (r"curl", Regex::new(r"curl").unwrap()),
-        (r"wget", Regex::new(r"wget").unwrap()),
-        (r"python", Regex::new(r"python").unwrap()),
-        (r"java", Regex::new(r"java").unwrap()),
-        (r"node", Regex::new(r"node").unwrap()),
-        (r"go-http", Regex::new(r"go-http").unwrap()),
-        (r"axios", Regex::new(r"axios").unwrap()),
-        (r"okhttp", Regex::new(r"okhttp").unwrap()),
-        (r"libwww", Regex::new(r"libwww").unwrap()),
-        (r"lwp-trivial", Regex::new(r"lwp-trivial").unwrap()),
-        (r"mechanize", Regex::new(r"mechanize").unwrap()),
-        (r"requests", Regex::new(r"requests").unwrap()),
-        (r"urllib", Regex::new(r"urllib").unwrap()),
-        (r"httpie", Regex::new(r"httpie").unwrap()),
-        (r"postman", Regex::new(r"postman").unwrap()),
-        (r"insomnia", Regex::new(r"insomnia").unwrap()),
-        (r"^$", Regex::new(r"^$").unwrap()),
-        (r"mozilla/4\.0$", Regex::new(r"mozilla/4\.0$").unwrap()),
-    ]
-});
-
-fn get_header(headers: &Bound<'_, PyDict>, key: &str) -> Option<String> {
-    headers
-        .get_item(key)
-        .ok()
-        .flatten()
-        .and_then(|v| v.str().ok())
-        .and_then(|s| s.to_str().ok().map(|v| v.to_string()))
+fn headers_to_map(headers: &Bound<'_, PyDict>) -> PyResult<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    for (k, v) in headers.iter() {
+        let key: String = k.extract()?;
+        let value = v.str()?.to_string_lossy().into_owned();
+        map.insert(key, value);
+    }
+    Ok(map)
 }
 
-fn has_header(headers: &Bound<'_, PyDict>, key: &str) -> bool {
-    match get_header(headers, key) {
-        Some(value) => !value.is_empty(),
-        None => false,
+fn map_to_pydict<'py>(py: Python<'py>, map: &HashMap<String, Vec<f64>>) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new_bound(py);
+    for (k, vals) in map.iter() {
+        let list = PyList::new_bound(py, vals.iter().copied());
+        dict.set_item(k, list)?;
     }
+    Ok(dict.into())
 }
 
-fn check_user_agent(user_agent: &str) -> Option<String> {
-    if user_agent.is_empty() {
-        return Some("Empty user agent".to_string());
-    }
-
-    let ua_lower = user_agent.to_lowercase();
-
-    for legit in LEGITIMATE_BOTS.iter() {
-        if legit.is_match(&ua_lower) {
-            return None;
+fn pydict_to_map(state: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Vec<f64>>> {
+    let mut map = HashMap::new();
+    for (k, v) in state.iter() {
+        let key: String = k.extract()?;
+        let list = v.downcast::<PyList>()?;
+        let mut vals = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            vals.push(item.extract::<f64>()?);
         }
+        map.insert(key, vals);
     }
-
-    for (pattern, regex) in SUSPICIOUS_UA.iter() {
-        if regex.is_match(&ua_lower) {
-            return Some(format!("Pattern: {}", pattern));
-        }
-    }
-
-    if user_agent.len() < 10 {
-        return Some("Too short".to_string());
-    }
-    if user_agent.len() > 500 {
-        return Some("Too long".to_string());
-    }
-
-    None
-}
-
-#[pyfunction]
-fn validate_headers(headers: Bound<'_, PyDict>) -> PyResult<Option<String>> {
-    validate_headers_with_config(headers, None, None)
-}
-
-#[pyfunction]
-fn validate_headers_with_config(
-    headers: Bound<'_, PyDict>,
-    required_headers: Option<Vec<String>>,
-    min_score: Option<i32>,
-) -> PyResult<Option<String>> {
-    let required = required_headers.unwrap_or_else(|| {
-        vec!["HTTP_USER_AGENT".to_string(), "HTTP_ACCEPT".to_string()]
-    });
-    let required_set: HashSet<String> = required.iter().cloned().collect();
-    let check_required = !required.is_empty();
-
-    let mut missing = Vec::new();
-    if check_required {
-        if required_set.contains("HTTP_USER_AGENT") && !has_header(&headers, "HTTP_USER_AGENT") {
-            missing.push("user-agent".to_string());
-        }
-        if required_set.contains("HTTP_ACCEPT") && !has_header(&headers, "HTTP_ACCEPT") {
-            missing.push("accept".to_string());
-        }
-    }
-
-    if !missing.is_empty() {
-        return Ok(Some(format!(
-            "Missing required headers: {}",
-            missing.join(", ")
-        )));
-    }
-
-    let user_agent = get_header(&headers, "HTTP_USER_AGENT").unwrap_or_default();
-    if let Some(reason) = check_user_agent(&user_agent) {
-        return Ok(Some(format!("Suspicious user agent: {}", reason)));
-    }
-
-    let server_protocol = get_header(&headers, "SERVER_PROTOCOL").unwrap_or_default();
-    let accept = get_header(&headers, "HTTP_ACCEPT").unwrap_or_default();
-    let accept_language = get_header(&headers, "HTTP_ACCEPT_LANGUAGE").unwrap_or_default();
-    let accept_encoding = get_header(&headers, "HTTP_ACCEPT_ENCODING").unwrap_or_default();
-    let connection = get_header(&headers, "HTTP_CONNECTION").unwrap_or_default();
-
-    if check_required {
-        if server_protocol.starts_with("HTTP/2")
-            && user_agent.to_lowercase().contains("mozilla/4.0")
-        {
-            return Ok(Some(
-                "Suspicious headers: HTTP/2 with old browser user agent".to_string(),
-            ));
-        }
-        if !user_agent.is_empty()
-            && accept.is_empty()
-            && required_set.contains("HTTP_ACCEPT")
-        {
-            return Ok(Some(
-                "Suspicious headers: User-Agent present but no Accept header".to_string(),
-            ));
-        }
-        if accept == "*/*" && accept_language.is_empty() && accept_encoding.is_empty() {
-            return Ok(Some(
-                "Suspicious headers: Generic Accept header without language/encoding".to_string(),
-            ));
-        }
-        if !user_agent.is_empty()
-            && accept_language.is_empty()
-            && accept_encoding.is_empty()
-            && connection.is_empty()
-        {
-            return Ok(Some(
-                "Suspicious headers: Missing all browser-standard headers".to_string(),
-            ));
-        }
-        if !user_agent.is_empty()
-            && server_protocol == "HTTP/1.0"
-            && user_agent.to_lowercase().contains("chrome")
-        {
-            return Ok(Some(
-                "Suspicious headers: Modern browser with HTTP/1.0".to_string(),
-            ));
-        }
-    }
-
-    let mut score = 0;
-    if has_header(&headers, "HTTP_USER_AGENT") {
-        score += 2;
-    }
-    if has_header(&headers, "HTTP_ACCEPT") {
-        score += 2;
-    }
-
-    for header in [
-        "HTTP_ACCEPT_LANGUAGE",
-        "HTTP_ACCEPT_ENCODING",
-        "HTTP_CONNECTION",
-        "HTTP_CACHE_CONTROL",
-    ] {
-        if has_header(&headers, header) {
-            score += 1;
-        }
-    }
-
-    if !accept_language.is_empty() && !accept_encoding.is_empty() {
-        score += 1;
-    }
-    if connection == "keep-alive" {
-        score += 1;
-    }
-    if accept.contains("text/html") && accept.contains("application/xml") {
-        score += 1;
-    }
-
-    let min_score = min_score.unwrap_or(3);
-    if min_score > 0 && score < min_score {
-        return Ok(Some(format!("Low header quality score: {}", score)));
-    }
-
-    Ok(None)
+    Ok(map)
 }
 
 #[derive(Clone)]
-struct FeatureRecordInput {
-    ip: String,
-    path_lower: String,
-    path_len: usize,
-    timestamp: f64,
-    response_time: f64,
-    status_idx: i32,
-    kw_check: bool,
-    total_404: i32,
-}
+struct PyFeatureRecordInput(FeatureRecordInput);
 
-impl<'py> FromPyObject<'py> for FeatureRecordInput {
+impl<'py> FromPyObject<'py> for PyFeatureRecordInput {
     fn extract(ob: &'py PyAny) -> PyResult<Self> {
         let dict: &PyDict = ob.downcast()?;
-
         let get_required = |key: &str| -> PyResult<&PyAny> {
             dict.get_item(key)?
                 .ok_or_else(|| PyErr::new::<PyKeyError, _>(key.to_string()))
         };
-
-        Ok(Self {
+        Ok(Self(FeatureRecordInput {
             ip: get_required("ip")?.extract()?,
             path_lower: get_required("path_lower")?.extract()?,
             path_len: get_required("path_len")?.extract()?,
@@ -251,281 +67,100 @@ impl<'py> FromPyObject<'py> for FeatureRecordInput {
             status_idx: get_required("status_idx")?.extract()?,
             kw_check: get_required("kw_check")?.extract()?,
             total_404: get_required("total_404")?.extract()?,
-        })
+        }))
     }
 }
 
 #[derive(Clone)]
-struct RecentEntryInput {
-    path_lower: String,
-    timestamp: f64,
-    status: i32,
-    kw_check: bool,
-}
+struct PyRecentEntryInput(RecentEntryInput);
 
-impl<'py> FromPyObject<'py> for RecentEntryInput {
+impl<'py> FromPyObject<'py> for PyRecentEntryInput {
     fn extract(ob: &'py PyAny) -> PyResult<Self> {
         let dict: &PyDict = ob.downcast()?;
-
         let get_required = |key: &str| -> PyResult<&PyAny> {
             dict.get_item(key)?
                 .ok_or_else(|| PyErr::new::<PyKeyError, _>(key.to_string()))
         };
-
-        Ok(Self {
+        Ok(Self(RecentEntryInput {
             path_lower: get_required("path_lower")?.extract()?,
             timestamp: get_required("timestamp")?.extract()?,
             status: get_required("status")?.extract()?,
             kw_check: get_required("kw_check")?.extract()?,
-        })
+        }))
     }
 }
 
-fn build_timestamp_index(records: &[FeatureRecordInput]) -> HashMap<String, Vec<f64>> {
-    let mut map: HashMap<String, Vec<f64>> = HashMap::new();
-    for rec in records {
-        map.entry(rec.ip.clone())
-            .or_default()
-            .push(rec.timestamp);
-    }
-    for timestamps in map.values_mut() {
-        timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    }
-    map
+#[pyfunction]
+fn validate_headers(headers: Bound<'_, PyDict>) -> PyResult<Option<String>> {
+    let map = headers_to_map(&headers)?;
+    Ok(core_validate_headers(&map))
 }
 
-fn count_burst(timestamps: Option<&Vec<f64>>, current: f64) -> i32 {
-    if let Some(ts) = timestamps {
-        let min_ts = current - 10.0;
-        ts.iter()
-            .filter(|value| **value >= min_ts && **value <= current)
-            .count() as i32
-    } else {
-        0
-    }
-}
-
-fn keyword_hits(path_lower: &str, keywords: &[String], enabled: bool) -> i32 {
-    if !enabled {
-        return 0;
-    }
-    keywords
-        .iter()
-        .filter(|kw| path_lower.contains(kw.as_str()))
-        .count() as i32
-}
-
-
-fn state_to_timestamp_index(state: Option<&Bound<'_, PyAny>>) -> PyResult<HashMap<String, Vec<f64>>> {
-    let mut map: HashMap<String, Vec<f64>> = HashMap::new();
-
-    let Some(state_any) = state else {
-        return Ok(map);
-    };
-
-    let state_dict = state_any.downcast::<PyDict>()?;
-    let Some(ts_any) = state_dict.get_item("timestamps_by_ip")? else {
-        return Ok(map);
-    };
-    let ts_dict = ts_any.downcast::<PyDict>()?;
-
-    for (ip_obj, values_obj) in ts_dict.iter() {
-        let ip: String = ip_obj.extract()?;
-        let list = values_obj.downcast::<PyList>()?;
-        let mut vals = Vec::with_capacity(list.len());
-        for value in list.iter() {
-            vals.push(value.extract::<f64>()?);
-        }
-        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        map.insert(ip, vals);
-    }
-
-    Ok(map)
-}
-
-fn timestamp_index_to_state<'py>(
-    py: Python<'py>,
-    timestamp_index: &HashMap<String, Vec<f64>>,
-) -> PyResult<Py<PyDict>> {
-    let state = PyDict::new_bound(py);
-    let ts_dict = PyDict::new_bound(py);
-
-    for (ip, values) in timestamp_index.iter() {
-        let values_list = PyList::new_bound(py, values.iter().copied());
-        ts_dict.set_item(ip, values_list)?;
-    }
-
-    state.set_item("timestamps_by_ip", ts_dict)?;
-    Ok(state.into())
-}
-
-fn lower_bound(values: &[f64], target: f64) -> usize {
-    let mut left = 0usize;
-    let mut right = values.len();
-    while left < right {
-        let mid = (left + right) / 2;
-        if values[mid] < target {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-    left
-}
-
-fn upper_bound(values: &[f64], target: f64) -> usize {
-    let mut left = 0usize;
-    let mut right = values.len();
-    while left < right {
-        let mid = (left + right) / 2;
-        if values[mid] <= target {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-    left
-}
-
-fn is_scanning_path(path_lower: &str) -> bool {
-    let scanning_patterns = [
-        "wp-admin",
-        "wp-content",
-        "wp-includes",
-        "wp-config",
-        "xmlrpc.php",
-        "admin",
-        "phpmyadmin",
-        "adminer",
-        "config",
-        "configuration",
-        "settings",
-        "setup",
-        "install",
-        "installer",
-        "backup",
-        "database",
-        "db",
-        "mysql",
-        "sql",
-        "dump",
-        ".env",
-        ".git",
-        ".htaccess",
-        ".htpasswd",
-        "passwd",
-        "shadow",
-        "robots.txt",
-        "sitemap.xml",
-        "cgi-bin",
-        "scripts",
-        "shell",
-        "cmd",
-        "exec",
-        ".php",
-        ".asp",
-        ".aspx",
-        ".jsp",
-        ".cgi",
-        ".pl",
-    ];
-
-    if scanning_patterns.iter().any(|pat| path_lower.contains(pat)) {
-        return true;
-    }
-    if path_lower.contains("../") || path_lower.contains("..\\") {
-        return true;
-    }
-    let encoded = ["%2e%2e", "%252e", "%c0%ae"];
-    if encoded.iter().any(|enc| path_lower.contains(enc)) {
-        return true;
-    }
-    false
+#[pyfunction]
+fn validate_headers_with_config(
+    headers: Bound<'_, PyDict>,
+    required_headers: Option<Vec<String>>,
+    min_score: Option<i32>,
+) -> PyResult<Option<String>> {
+    let map = headers_to_map(&headers)?;
+    Ok(core_validate_headers_with_config(&map, required_headers, min_score))
 }
 
 #[pyfunction]
 fn extract_features<'py>(
     py: Python<'py>,
-    records: Vec<FeatureRecordInput>,
+    records: Vec<PyFeatureRecordInput>,
     static_keywords: Vec<String>,
 ) -> PyResult<Vec<Py<PyDict>>> {
-    if records.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let keywords: Vec<String> = static_keywords
+    let core_records: Vec<FeatureRecordInput> = records.into_iter().map(|r| r.0).collect();
+    let output: Vec<FeatureRecordOutput> = core_extract_features(core_records, static_keywords);
+    output
         .into_iter()
-        .map(|kw| kw.to_lowercase())
-        .collect();
-
-    let timestamp_index = build_timestamp_index(&records);
-    let mut output = Vec::with_capacity(records.len());
-
-    for rec in records.into_iter() {
-        let timestamps = timestamp_index.get(&rec.ip);
-        let burst = count_burst(timestamps, rec.timestamp);
-        let kw = keyword_hits(&rec.path_lower, &keywords, rec.kw_check);
-
-        let feature = PyDict::new_bound(py);
-        feature.set_item("ip", rec.ip.clone())?;
-        feature.set_item("path_len", rec.path_len)?;
-        feature.set_item("kw_hits", kw)?;
-        feature.set_item("resp_time", rec.response_time)?;
-        feature.set_item("status_idx", rec.status_idx)?;
-        feature.set_item("burst_count", burst)?;
-        feature.set_item("total_404", rec.total_404)?;
-        output.push(feature.into());
-    }
-
-    Ok(output)
+        .map(|rec| feature_output_to_pydict(py, &rec))
+        .collect()
 }
-
 
 #[pyfunction]
 fn extract_features_batch_with_state<'py>(
     py: Python<'py>,
-    records: Vec<FeatureRecordInput>,
+    records: Vec<PyFeatureRecordInput>,
     static_keywords: Vec<String>,
     state: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Py<PyDict>> {
-    let keywords: Vec<String> = static_keywords
-        .into_iter()
-        .map(|kw| kw.to_lowercase())
-        .collect();
+    let state_map = if let Some(state_any) = state {
+        let dict = state_any.downcast::<PyDict>()?;
+        match dict.get_item("timestamps_by_ip")? {
+            Some(v) => {
+                let ts_dict = v.downcast::<PyDict>()?;
+                Some(FeatureState {
+                    timestamps_by_ip: pydict_to_map(&ts_dict)?,
+                })
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
 
-    let mut timestamp_index = state_to_timestamp_index(state.as_ref())?;
+    let core_records: Vec<FeatureRecordInput> = records.into_iter().map(|r| r.0).collect();
+    let result: FeatureBatchResult =
+        core_extract_features_batch_with_state(core_records, static_keywords, state_map);
 
-    for rec in records.iter() {
-        timestamp_index
-            .entry(rec.ip.clone())
-            .or_default()
-            .push(rec.timestamp);
-    }
-    for timestamps in timestamp_index.values_mut() {
-        timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    }
+    let features: Vec<Py<PyDict>> = result
+        .features
+        .iter()
+        .map(|rec| feature_output_to_pydict(py, rec))
+        .collect::<PyResult<Vec<_>>>()?;
 
-    let mut features: Vec<Py<PyDict>> = Vec::with_capacity(records.len());
-    for rec in records.into_iter() {
-        let timestamps = timestamp_index.get(&rec.ip);
-        let burst = count_burst(timestamps, rec.timestamp);
-        let kw = keyword_hits(&rec.path_lower, &keywords, rec.kw_check);
-
-        let feature = PyDict::new_bound(py);
-        feature.set_item("ip", rec.ip.clone())?;
-        feature.set_item("path_len", rec.path_len)?;
-        feature.set_item("kw_hits", kw)?;
-        feature.set_item("resp_time", rec.response_time)?;
-        feature.set_item("status_idx", rec.status_idx)?;
-        feature.set_item("burst_count", burst)?;
-        feature.set_item("total_404", rec.total_404)?;
-        features.push(feature.into());
-    }
-
-    let result = PyDict::new_bound(py);
-    result.set_item("features", features)?;
-    result.set_item("state", timestamp_index_to_state(py, &timestamp_index)?)?;
-    Ok(result.into())
+    let result_dict = PyDict::new_bound(py);
+    result_dict.set_item("features", features)?;
+    let state_dict = PyDict::new_bound(py);
+    state_dict.set_item(
+        "timestamps_by_ip",
+        map_to_pydict(py, &result.state.timestamps_by_ip)?,
+    )?;
+    result_dict.set_item("state", state_dict)?;
+    Ok(result_dict.into())
 }
 
 #[pyfunction]
@@ -534,6 +169,7 @@ fn finalize_feature_state<'py>(
     _static_keywords: Vec<String>,
     _state: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Py<PyDict>> {
+    let _ = core_finalize_feature_state();
     let result = PyDict::new_bound(py);
     let empty: Vec<Py<PyDict>> = Vec::new();
     result.set_item("features", empty)?;
@@ -543,76 +179,371 @@ fn finalize_feature_state<'py>(
 #[pyfunction]
 fn analyze_recent_behavior<'py>(
     py: Python<'py>,
-    entries: Vec<RecentEntryInput>,
+    entries: Vec<PyRecentEntryInput>,
     static_keywords: Vec<String>,
 ) -> PyResult<Option<Py<PyDict>>> {
-    if entries.is_empty() {
-        return Ok(None);
-    }
-
-    let keywords: Vec<String> = static_keywords
-        .into_iter()
-        .map(|kw| kw.to_lowercase())
-        .collect();
-    let mut timestamps: Vec<f64> = entries.iter().map(|e| e.timestamp).collect();
-    timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut total_kw_hits = 0f64;
-    let mut total_burst = 0f64;
-    let mut max_404s = 0i32;
-    let mut scanning_404s = 0i32;
-
-    for entry in entries.iter() {
-        if entry.status == 404 {
-            max_404s += 1;
-            if is_scanning_path(&entry.path_lower) {
-                scanning_404s += 1;
-            }
+    let core_entries: Vec<RecentEntryInput> = entries.into_iter().map(|e| e.0).collect();
+    let result: Option<BehaviorAnalysis> =
+        core_analyze_recent_behavior(core_entries, static_keywords);
+    match result {
+        None => Ok(None),
+        Some(r) => {
+            let dict = PyDict::new_bound(py);
+            dict.set_item("avg_kw_hits", r.avg_kw_hits)?;
+            dict.set_item("max_404s", r.max_404s)?;
+            dict.set_item("avg_burst", r.avg_burst)?;
+            dict.set_item("total_requests", r.total_requests)?;
+            dict.set_item("scanning_404s", r.scanning_404s)?;
+            dict.set_item("legitimate_404s", r.legitimate_404s)?;
+            dict.set_item("should_block", r.should_block)?;
+            Ok(Some(dict.into()))
         }
-        let kw = keyword_hits(&entry.path_lower, &keywords, entry.kw_check);
-        total_kw_hits += kw as f64;
+    }
+}
 
-        let lower = lower_bound(&timestamps, entry.timestamp - 10.0);
-        let upper = upper_bound(&timestamps, entry.timestamp + 10.0);
-        let burst = (upper.saturating_sub(lower)) as i32;
-        total_burst += burst as f64;
+#[pyclass]
+struct IsolationForest {
+    inner: CoreForest,
+}
+
+#[pymethods]
+impl IsolationForest {
+    #[new]
+    #[pyo3(
+        signature = (
+            *,
+            n_estimators = 100,
+            max_samples = None,
+            contamination = None,
+            max_features = None,
+            bootstrap = false,
+            n_jobs = None,
+            random_state = None,
+            verbose = 0,
+            warm_start = false
+        )
+    )]
+    fn new(
+        n_estimators: usize,
+        max_samples: Option<Bound<'_, PyAny>>,
+        contamination: Option<Bound<'_, PyAny>>,
+        max_features: Option<Bound<'_, PyAny>>,
+        bootstrap: bool,
+        n_jobs: Option<i32>,
+        random_state: Option<u64>,
+        verbose: usize,
+        warm_start: bool,
+    ) -> PyResult<Self> {
+        let _ = n_jobs;
+        let max_samples = parse_max_samples(max_samples)?;
+        let contamination = parse_contamination(contamination)?;
+        let max_features = parse_max_features(max_features)?;
+
+        Ok(Self {
+            inner: CoreForest::new(
+                n_estimators,
+                max_samples,
+                contamination,
+                max_features,
+                bootstrap,
+                random_state,
+                verbose,
+                warm_start,
+            ),
+        })
     }
 
-    let total_requests = entries.len() as i32;
-    let avg_kw_hits = if total_requests > 0 {
-        total_kw_hits / total_requests as f64
-    } else {
-        0.0
-    };
-    let avg_burst = if total_requests > 0 {
-        total_burst / total_requests as f64
-    } else {
-        0.0
-    };
-    let legitimate_404s = (max_404s - scanning_404s).max(0);
-
-    let mut should_block = true;
-    if max_404s == 0 && avg_kw_hits == 0.0 && scanning_404s == 0 {
-        should_block = false;
-    } else if avg_kw_hits < 3.0
-        && scanning_404s < 5
-        && legitimate_404s < 20
-        && avg_burst < 25.0
-        && total_requests < 150
-    {
-        should_block = false;
+    fn fit(&mut self, data: Vec<Vec<f64>>) {
+        self.inner.fit(data);
     }
 
-    let result = PyDict::new_bound(py);
-    result.set_item("avg_kw_hits", avg_kw_hits)?;
-    result.set_item("max_404s", max_404s)?;
-    result.set_item("avg_burst", avg_burst)?;
-    result.set_item("total_requests", total_requests)?;
-    result.set_item("scanning_404s", scanning_404s)?;
-    result.set_item("legitimate_404s", legitimate_404s)?;
-    result.set_item("should_block", should_block)?;
+    fn retrain(&mut self, data: Vec<Vec<f64>>) {
+        self.inner.retrain(data);
+    }
 
-    Ok(Some(result.into()))
+    fn anomaly_score(&self, point: Vec<f64>) -> f64 {
+        self.inner.anomaly_score(&point)
+    }
+
+    #[pyo3(signature = (point, thresh = 0.5))]
+    fn is_anomaly(&self, point: Vec<f64>, thresh: f64) -> bool {
+        self.inner.is_anomaly(&point, thresh)
+    }
+
+    fn score_samples(&self, data: Vec<Vec<f64>>) -> Vec<f64> {
+        self.inner.score_samples(&data)
+    }
+
+    fn decision_function(&self, data: Vec<Vec<f64>>) -> Vec<f64> {
+        self.inner.decision_function(&data)
+    }
+
+    fn predict(&self, data: Vec<Vec<f64>>) -> Vec<i32> {
+        self.inner.predict(&data)
+    }
+
+    fn to_json<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        let state = self.inner.to_state();
+        state_to_pydict(py, &state)
+    }
+
+    #[staticmethod]
+    fn from_json(obj: Bound<'_, PyAny>) -> PyResult<Self> {
+        let dict = obj.downcast::<PyDict>()?;
+        let state = pydict_to_state(dict)?;
+        Ok(Self {
+            inner: CoreForest::from_state(state),
+        })
+    }
+}
+
+fn parse_max_samples(value: Option<Bound<'_, PyAny>>) -> PyResult<MaxSamples> {
+    match value {
+        None => Ok(MaxSamples::Auto),
+        Some(v) if v.is_none() => Ok(MaxSamples::Auto),
+        Some(v) => {
+            if let Ok(s) = v.extract::<String>() {
+                if s == "auto" {
+                    return Ok(MaxSamples::Auto);
+                }
+            }
+            if let Ok(i) = v.extract::<usize>() {
+                return Ok(MaxSamples::Int(i));
+            }
+            if let Ok(f) = v.extract::<f64>() {
+                return Ok(MaxSamples::Float(f));
+            }
+            Err(PyErr::new::<PyValueError, _>(
+                "max_samples must be 'auto', int, or float",
+            ))
+        }
+    }
+}
+
+fn parse_max_features(value: Option<Bound<'_, PyAny>>) -> PyResult<MaxFeatures> {
+    match value {
+        None => Ok(MaxFeatures::Float(1.0)),
+        Some(v) if v.is_none() => Ok(MaxFeatures::Float(1.0)),
+        Some(v) => {
+            if let Ok(i) = v.extract::<usize>() {
+                return Ok(MaxFeatures::Int(i));
+            }
+            if let Ok(f) = v.extract::<f64>() {
+                return Ok(MaxFeatures::Float(f));
+            }
+            Err(PyErr::new::<PyValueError, _>(
+                "max_features must be int or float",
+            ))
+        }
+    }
+}
+
+fn parse_contamination(value: Option<Bound<'_, PyAny>>) -> PyResult<Contamination> {
+    match value {
+        None => Ok(Contamination::Auto),
+        Some(v) if v.is_none() => Ok(Contamination::Auto),
+        Some(v) => {
+            if let Ok(s) = v.extract::<String>() {
+                if s == "auto" {
+                    return Ok(Contamination::Auto);
+                }
+            }
+            if let Ok(f) = v.extract::<f64>() {
+                if f > 0.0 && f <= 0.5 {
+                    return Ok(Contamination::Fixed(f));
+                }
+            }
+            Err(PyErr::new::<PyValueError, _>(
+                "contamination must be 'auto' or float in (0, 0.5]",
+            ))
+        }
+    }
+}
+
+fn tree_state_to_pydict<'py>(
+    py: Python<'py>,
+    state: &IsolationTreeState,
+) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("depth", state.depth)?;
+    dict.set_item("maxDepth", state.max_depth)?;
+    dict.set_item("splitAttr", state.split_attr)?;
+    dict.set_item("splitValue", state.split_value)?;
+    dict.set_item("size", state.size)?;
+    if let Some(left) = &state.left {
+        dict.set_item("left", tree_state_to_pydict(py, left)?)?;
+    } else {
+        dict.set_item("left", py.None())?;
+    }
+    if let Some(right) = &state.right {
+        dict.set_item("right", tree_state_to_pydict(py, right)?)?;
+    } else {
+        dict.set_item("right", py.None())?;
+    }
+    Ok(dict.into())
+}
+
+fn feature_output_to_pydict<'py>(
+    py: Python<'py>,
+    rec: &FeatureRecordOutput,
+) -> PyResult<Py<PyDict>> {
+    let feature = PyDict::new_bound(py);
+    feature.set_item("ip", rec.ip.clone())?;
+    feature.set_item("path_len", rec.path_len)?;
+    feature.set_item("kw_hits", rec.kw_hits)?;
+    feature.set_item("resp_time", rec.resp_time)?;
+    feature.set_item("status_idx", rec.status_idx)?;
+    feature.set_item("burst_count", rec.burst_count)?;
+    feature.set_item("total_404", rec.total_404)?;
+    Ok(feature.into())
+}
+
+fn state_to_pydict<'py>(py: Python<'py>, state: &IsolationForestState) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("nEstimators", state.n_estimators)?;
+    dict.set_item("maxSamples", max_samples_to_py(py, &state.max_samples))?;
+    dict.set_item("contamination", contamination_to_py(py, &state.contamination))?;
+    dict.set_item("maxFeatures", max_features_to_py(py, &state.max_features))?;
+    dict.set_item("bootstrap", state.bootstrap)?;
+    dict.set_item("randomState", state.random_state)?;
+    dict.set_item("verbose", state.verbose)?;
+    dict.set_item("warmStart", state.warm_start)?;
+    dict.set_item("maxSamples_", state.max_samples_)?;
+    dict.set_item("maxFeatures_", state.max_features_)?;
+    dict.set_item("offset_", state.offset_)?;
+    dict.set_item("nFeaturesIn_", state.n_features_in_)?;
+    let trees: Vec<Py<PyDict>> = state
+        .trees
+        .iter()
+        .map(|t| tree_state_to_pydict(py, t))
+        .collect::<PyResult<Vec<_>>>()?;
+    dict.set_item("trees", trees)?;
+    let feats = PyList::new_bound(py, state.estimators_features.iter().map(|v| {
+        PyList::new_bound(py, v.iter().copied())
+    }));
+    dict.set_item("estimatorsFeatures", feats)?;
+    Ok(dict.into())
+}
+
+fn pydict_to_tree_state(dict: &Bound<'_, PyDict>) -> PyResult<IsolationTreeState> {
+    let depth: usize = dict.get_item("depth")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("depth".to_string())
+    })?.extract()?;
+    let max_depth: usize = dict.get_item("maxDepth")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("maxDepth".to_string())
+    })?.extract()?;
+    let split_attr: Option<usize> = dict.get_item("splitAttr")?.unwrap().extract()?;
+    let split_value: Option<f64> = dict.get_item("splitValue")?.unwrap().extract()?;
+    let size: usize = dict.get_item("size")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("size".to_string())
+    })?.extract()?;
+    let left = match dict.get_item("left")? {
+        Some(v) if !v.is_none() => {
+            let ld = v.downcast::<PyDict>()?;
+            Some(Box::new(pydict_to_tree_state(&ld)?))
+        }
+        _ => None,
+    };
+    let right = match dict.get_item("right")? {
+        Some(v) if !v.is_none() => {
+            let rd = v.downcast::<PyDict>()?;
+            Some(Box::new(pydict_to_tree_state(&rd)?))
+        }
+        _ => None,
+    };
+    Ok(IsolationTreeState {
+        depth,
+        max_depth,
+        split_attr,
+        split_value,
+        size,
+        left,
+        right,
+    })
+}
+
+fn pydict_to_state(dict: &Bound<'_, PyDict>) -> PyResult<IsolationForestState> {
+    let n_estimators: usize = dict.get_item("nEstimators")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("nEstimators".to_string())
+    })?.extract()?;
+    let max_samples = parse_max_samples(dict.get_item("maxSamples")?)?;
+    let contamination = parse_contamination(dict.get_item("contamination")?)?;
+    let max_features = parse_max_features(dict.get_item("maxFeatures")?)?;
+    let bootstrap: bool = dict.get_item("bootstrap")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("bootstrap".to_string())
+    })?.extract()?;
+    let random_state: Option<u64> = dict
+        .get_item("randomState")?
+        .map(|v| v.extract())
+        .transpose()?
+        .flatten();
+    let verbose: usize = dict.get_item("verbose")?.unwrap().extract()?;
+    let warm_start: bool = dict.get_item("warmStart")?.unwrap().extract()?;
+    let max_samples_: usize = dict.get_item("maxSamples_")?.unwrap().extract()?;
+    let max_features_: usize = dict.get_item("maxFeatures_")?.unwrap().extract()?;
+    let offset_: f64 = dict.get_item("offset_")?.unwrap().extract()?;
+    let n_features_in_: usize = dict.get_item("nFeaturesIn_")?.unwrap().extract()?;
+    let trees_any = dict.get_item("trees")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("trees".to_string())
+    })?;
+    let trees_list = trees_any.downcast::<PyList>()?;
+    let mut trees = Vec::with_capacity(trees_list.len());
+    for item in trees_list.iter() {
+        let tree_dict = item.downcast::<PyDict>()?;
+        trees.push(pydict_to_tree_state(&tree_dict)?);
+    }
+    let feats_any = dict.get_item("estimatorsFeatures")?.ok_or_else(|| {
+        PyErr::new::<PyKeyError, _>("estimatorsFeatures".to_string())
+    })?;
+    let feats_list = feats_any.downcast::<PyList>()?;
+    let mut estimators_features = Vec::with_capacity(feats_list.len());
+    for item in feats_list.iter() {
+        let list = item.downcast::<PyList>()?;
+        let mut v = Vec::with_capacity(list.len());
+        for idx in list.iter() {
+            v.push(idx.extract::<usize>()?);
+        }
+        estimators_features.push(v);
+    }
+
+    Ok(IsolationForestState {
+        n_estimators,
+        max_samples,
+        contamination,
+        max_features,
+        bootstrap,
+        random_state,
+        verbose,
+        warm_start,
+        max_samples_,
+        max_features_,
+        offset_,
+        n_features_in_,
+        trees,
+        estimators_features,
+    })
+}
+
+fn max_samples_to_py<'py>(py: Python<'py>, value: &MaxSamples) -> PyObject {
+    match value {
+        MaxSamples::Auto => "auto".into_py(py),
+        MaxSamples::Int(v) => (*v as u64).into_py(py),
+        MaxSamples::Float(v) => (*v).into_py(py),
+    }
+}
+
+fn max_features_to_py<'py>(py: Python<'py>, value: &MaxFeatures) -> PyObject {
+    match value {
+        MaxFeatures::Int(v) => (*v as u64).into_py(py),
+        MaxFeatures::Float(v) => (*v).into_py(py),
+    }
+}
+
+fn contamination_to_py<'py>(py: Python<'py>, value: &Contamination) -> PyObject {
+    match value {
+        Contamination::Auto => "auto".into_py(py),
+        Contamination::Fixed(v) => (*v).into_py(py),
+    }
 }
 
 #[pymodule]
@@ -623,129 +554,6 @@ fn aiwaf_rust(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_features_batch_with_state, m)?)?;
     m.add_function(wrap_pyfunction!(finalize_feature_state, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_recent_behavior, m)?)?;
+    m.add_class::<IsolationForest>()?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pyo3::types::PyDict;
-
-    fn dict_from_pairs<'a>(
-        py: Python<'a>,
-        pairs: &'a [(&'a str, &'a str)],
-    ) -> Bound<'a, PyDict> {
-        let dict = PyDict::new_bound(py);
-        for (k, v) in pairs {
-            dict.set_item(*k, *v).unwrap();
-        }
-        dict
-    }
-
-    #[test]
-    fn validate_headers_blocks_missing_required() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[("HTTP_USER_AGENT", "Mozilla/5.0")]);
-            let result = validate_headers(headers).unwrap();
-            assert!(matches!(result, Some(msg) if msg.contains("Missing required headers")));
-        });
-    }
-
-    #[test]
-    fn validate_headers_with_config_allows_empty_required() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[("HTTP_USER_AGENT", "EmailScanner/1.0")]);
-            let result = validate_headers_with_config(headers, Some(vec![]), Some(0)).unwrap();
-            assert!(result.is_none());
-        });
-    }
-
-    #[test]
-    fn validate_headers_with_config_respects_required() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[("HTTP_USER_AGENT", "Mozilla/5.0")]);
-            let required = vec!["HTTP_USER_AGENT".to_string(), "HTTP_ACCEPT".to_string()];
-            let result = validate_headers_with_config(headers, Some(required), Some(3)).unwrap();
-            assert!(matches!(result, Some(msg) if msg.contains("Missing required headers")));
-        });
-    }
-
-    #[test]
-    fn validate_headers_blocks_suspicious_user_agent() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[
-                ("HTTP_USER_AGENT", "python-requests/2.25.1"),
-                ("HTTP_ACCEPT", "*/*"),
-            ]);
-            let result = validate_headers(headers).unwrap();
-            assert!(matches!(result, Some(msg) if msg.contains("Suspicious user agent")));
-        });
-    }
-
-    #[test]
-    fn validate_headers_blocks_suspicious_combinations() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[
-                ("HTTP_USER_AGENT", "Mozilla/4.0"),
-                ("HTTP_ACCEPT", "text/html"),
-                ("SERVER_PROTOCOL", "HTTP/2"),
-            ]);
-            let result = validate_headers(headers).unwrap();
-            assert!(matches!(result, Some(msg) if msg.contains("Suspicious headers")));
-        });
-    }
-
-    #[test]
-    fn validate_headers_allows_legit_browser() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[
-                ("HTTP_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
-                ("HTTP_ACCEPT", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-                ("HTTP_ACCEPT_LANGUAGE", "en-US,en;q=0.5"),
-                ("HTTP_ACCEPT_ENCODING", "gzip, deflate"),
-                ("HTTP_CONNECTION", "keep-alive"),
-            ]);
-            let result = validate_headers(headers).unwrap();
-            assert!(result.is_none());
-        });
-    }
-
-    #[test]
-    fn validate_headers_allows_legit_bot() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[
-                ("HTTP_USER_AGENT", "Googlebot/2.1 (+http://www.google.com/bot.html)"),
-                ("HTTP_ACCEPT", "*/*"),
-                ("HTTP_ACCEPT_LANGUAGE", "en-US"),
-            ]);
-            let result = validate_headers(headers).unwrap();
-            assert!(result.is_none());
-        });
-    }
-
-    #[test]
-    fn validate_headers_blocks_accept_star_missing_lang_encoding() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[
-                ("HTTP_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
-                ("HTTP_ACCEPT", "*/*"),
-            ]);
-            let result = validate_headers(headers).unwrap();
-            assert!(matches!(result, Some(msg) if msg.contains("Generic Accept header")));
-        });
-    }
-
-    #[test]
-    fn validate_headers_blocks_http10_chrome() {
-        Python::with_gil(|py| {
-            let headers = dict_from_pairs(py, &[
-                ("HTTP_USER_AGENT", "Mozilla/5.0 Chrome/120.0.0.0"),
-                ("HTTP_ACCEPT", "text/html"),
-                ("HTTP_ACCEPT_LANGUAGE", "en-US"),
-                ("SERVER_PROTOCOL", "HTTP/1.0"),
-            ]);
-            let result = validate_headers(headers).unwrap();
-            assert!(matches!(result, Some(msg) if msg.contains("HTTP/1.0")));
-        });
-    }
 }
