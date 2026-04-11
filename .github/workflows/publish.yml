@@ -100,6 +100,9 @@ jobs:
         shell: bash
         run: |
           for whl in dist/*.whl; do
+            echo "Checking $whl"
+            ls -l "$whl"
+            sha256sum "$whl"
             python -m zipfile -t "$whl"
             python scripts/check_zip_trailing.py "$whl"
           done
@@ -182,10 +185,16 @@ jobs:
       - name: Remove attestation files
         shell: bash
         run: rm -f dist/*.publish.attestation
+      - name: Normalize wheels
+        shell: bash
+        run: python scripts/normalize_wheel.py dist/*.whl
       - name: Verify artifacts
         shell: bash
         run: |
           for whl in dist/*.whl; do
+            echo "Checking $whl"
+            ls -l "$whl"
+            sha256sum "$whl"
             python -m zipfile -t "$whl"
             python scripts/check_zip_trailing.py "$whl"
           done

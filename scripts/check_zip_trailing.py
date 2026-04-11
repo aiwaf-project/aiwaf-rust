@@ -71,6 +71,11 @@ def main(argv: list[str]) -> int:
 
     failures: list[str] = []
     for arg in argv[1:]:
+        p_arg = Path(arg)
+        if p_arg.is_absolute():
+            if p_arg.is_file():
+                failures.extend(check_file(p_arg))
+            continue
         for p in Path().glob(arg):
             if p.is_file():
                 failures.extend(check_file(p))
