@@ -3,6 +3,8 @@
 Rust-powered WAF heuristics compiled to WebAssembly. Provides fast, deterministic
 feature extraction and anomaly scoring in browsers and Node.
 
+Version: `0.1.3`
+
 ## Install
 
 ```bash
