@@ -100,15 +100,21 @@ jobs:
       - name: Rebuild if CRC check fails
         shell: bash
         run: |
-          if ! python scripts/wheel_crc_check.py dist/*.whl; then
-            echo "CRC failure detected, rebuilding wheels..."
+          max_attempts=3
+          attempt=1
+          while true; do
+            if python scripts/wheel_crc_check.py dist/*.whl; then
+              break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "CRC still failing after $max_attempts attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            echo "CRC failure detected, rebuilding wheels (attempt $attempt/$max_attempts)..."
             rm -rf dist target
             maturin build --release --out dist
-          fi
-          if ! python scripts/wheel_crc_check.py dist/*.whl; then
-            echo "CRC still failing after rebuild"
-            exit 1
-          fi
+          done
       - name: Inspect wheels (pre-normalize)
         shell: bash
         run: |

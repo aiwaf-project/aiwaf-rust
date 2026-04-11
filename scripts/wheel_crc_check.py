@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 
 
@@ -16,7 +17,7 @@ def check(path: Path) -> int:
                 return 1
             print(f"{path}: CRC OK")
             return 0
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, zlib.error) as exc:
         print(f"{path}: invalid zip: {exc}")
         return 1
 
