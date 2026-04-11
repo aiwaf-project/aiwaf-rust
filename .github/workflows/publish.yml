@@ -89,6 +89,8 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0
           CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
+          CARGO_BUILD_JOBS: ${{ matrix.os == 'windows-latest' && 1 || 0 }}
+          RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C codegen-units=1' || '' }}
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
