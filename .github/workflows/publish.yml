@@ -128,7 +128,15 @@ jobs:
           done
       - name: Normalize wheels
         shell: bash
-        run: python scripts/normalize_wheel.py dist/*.whl
+        run: |
+          for whl in dist/*.whl; do
+            if python scripts/check_zip_trailing.py "$whl"; then
+              echo "No trailing data in $whl; skipping normalize"
+            else
+              echo "Trailing data detected in $whl; normalizing"
+              python scripts/normalize_wheel.py "$whl"
+            fi
+          done
       - name: Zip integrity check
         shell: bash
         run: |
@@ -230,7 +238,15 @@ jobs:
           done
       - name: Normalize wheels
         shell: bash
-        run: python scripts/normalize_wheel.py dist/*.whl
+        run: |
+          for whl in dist/*.whl; do
+            if python scripts/check_zip_trailing.py "$whl"; then
+              echo "No trailing data in $whl; skipping normalize"
+            else
+              echo "Trailing data detected in $whl; normalizing"
+              python scripts/normalize_wheel.py "$whl"
+            fi
+          done
       - name: Verify artifacts
         shell: bash
         run: |
