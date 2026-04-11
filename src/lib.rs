@@ -1,3 +1,4 @@
+#![allow(unsafe_op_in_unsafe_fn)]
 use aiwaf_core::{
     analyze_recent_behavior as core_analyze_recent_behavior,
     extract_features as core_extract_features,

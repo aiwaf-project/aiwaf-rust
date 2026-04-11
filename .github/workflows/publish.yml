@@ -56,6 +56,8 @@ jobs:
       - name: Build wasm
         working-directory: crates/aiwaf_wasm
         run: wasm-pack build --release --target bundler
+      - name: Patch wasm package metadata
+        run: python3 scripts/patch_wasm_pkg.py
       - name: Upload wasm package
         uses: actions/upload-artifact@v4
         with:
