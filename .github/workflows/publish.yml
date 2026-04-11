@@ -95,12 +95,26 @@ jobs:
         run: rm -rf dist
 
       - name: Build wheel
+        if: matrix.os != 'windows-latest'
         uses: PyO3/maturin-action@v1
         env:
           CARGO_INCREMENTAL: 0
           CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
-          CARGO_BUILD_JOBS: ${{ matrix.build_jobs }}
-          RUSTFLAGS: ${{ matrix.rustflags }}
+          PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        with:
+          command: build
+          args: --release --out dist
+          maturin-version: "1.7.4"
+          sccache: false
+      - name: Build wheel (Windows single job)
+        if: matrix.os == 'windows-latest'
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: 0
+          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
+          CARGO_BUILD_JOBS: 1
+          RUSTFLAGS: -C codegen-units=1
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
