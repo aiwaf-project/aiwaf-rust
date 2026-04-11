@@ -163,6 +163,9 @@ jobs:
         with:
           name: rust-sdist
           path: dist
+      - name: Remove attestation files
+        shell: bash
+        run: rm -f dist/*.publish.attestation
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
