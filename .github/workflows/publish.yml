@@ -174,7 +174,9 @@ jobs:
     needs: [build-wasm, pypi-publish]
     permissions:
       contents: read
-    if: ${{ secrets.NPM_TOKEN != '' }}
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    if: ${{ env.NPM_TOKEN != '' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
