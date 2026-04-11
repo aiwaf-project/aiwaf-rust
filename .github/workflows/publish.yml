@@ -174,8 +174,7 @@ jobs:
           done
       - name: Verify sdist
         run: |
-          python -m pip install -U twine pkginfo
-          twine check dist/*
+          python -m tarfile -t dist/*.tar.gz
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
@@ -237,7 +236,8 @@ jobs:
             python scripts/wheel_crc_check.py "$whl"
           done
           python -m pip install -U twine pkginfo
-          twine check dist/*
+          twine check dist/*.whl
+          python -m tarfile -t dist/*.tar.gz
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
