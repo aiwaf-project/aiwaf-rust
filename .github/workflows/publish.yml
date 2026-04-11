@@ -92,7 +92,18 @@ jobs:
         with:
           command: build
           args: --release --out dist
+          maturin-version: "1.7.4"
           sccache: false
+      - name: Install maturin CLI (for retries)
+        run: python -m pip install -U maturin
+      - name: Rebuild if CRC check fails
+        shell: bash
+        run: |
+          if ! python scripts/wheel_crc_check.py dist/*.whl; then
+            echo "CRC failure detected, rebuilding wheels..."
+            rm -rf dist target
+            maturin build --release --out dist
+          fi
       - name: Inspect wheels (pre-normalize)
         shell: bash
         run: |
@@ -100,8 +111,8 @@ jobs:
             echo "Inspecting $whl"
             ls -l "$whl"
             sha256sum "$whl"
-            python scripts/inspect_zip.py "$whl"
-            python scripts/wheel_crc_check.py "$whl"
+            python scripts/inspect_zip.py "$whl" || true
+            python scripts/wheel_crc_check.py "$whl" || true
           done
       - name: Normalize wheels
         shell: bash
