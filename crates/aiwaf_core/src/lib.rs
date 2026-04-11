@@ -628,7 +628,7 @@ impl IsolationTree {
             if !min_val.is_finite() || !max_val.is_finite() || min_val == max_val {
                 continue;
             }
-            let split_value = min_val + rng.gen::<f64>() * (max_val - min_val);
+            let split_value = min_val + rng.r#gen::<f64>() * (max_val - min_val);
 
             let mut l_count = 0.0;
             let mut r_count = 0.0;
@@ -953,7 +953,7 @@ impl IsolationForest {
         for _ in start_idx..target {
             let feature_subset = sample_features(&mut rng, self.n_features_in_, max_features);
             let sample = sample_rows(&mut rng, &data, max_samples, self.bootstrap);
-            let y: Vec<f64> = (0..sample.len()).map(|_| rng.gen::<f64>()).collect();
+            let y: Vec<f64> = (0..sample.len()).map(|_| rng.r#gen::<f64>()).collect();
             let mut tree = IsolationTree::new(0, height_limit);
             tree.fit(&sample, &y, &mut rng, &feature_subset);
             self.trees.push(tree);

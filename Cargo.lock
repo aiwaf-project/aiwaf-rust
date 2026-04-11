@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "aiwaf-wasm"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aiwaf_core",
  "getrandom",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "aiwaf_core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "once_cell",
  "rand",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "aiwaf_rust"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aiwaf_core",
  "pyo3",
