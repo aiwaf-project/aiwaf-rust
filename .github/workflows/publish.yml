@@ -88,6 +88,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           CARGO_INCREMENTAL: 0
+          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
@@ -112,8 +113,8 @@ jobs:
             fi
             attempt=$((attempt + 1))
             echo "CRC failure detected, rebuilding wheels (attempt $attempt/$max_attempts)..."
-            rm -rf dist target
-            maturin build --release --out dist
+            rm -rf dist "target/${{ matrix.os }}-${{ matrix.python }}" "target/retry-${{ matrix.os }}-${{ matrix.python }}-${attempt}"
+            CARGO_TARGET_DIR="target/retry-${{ matrix.os }}-${{ matrix.python }}-${attempt}" maturin build --release --out dist
           done
       - name: Inspect wheels (pre-normalize)
         shell: bash
