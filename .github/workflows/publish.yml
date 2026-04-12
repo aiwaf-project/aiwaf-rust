@@ -186,6 +186,7 @@ jobs:
         with:
           name: rust-wheels-${{ matrix.os }}-py${{ matrix.python }}
           path: dist
+          compression-level: 0
 
   build-sdist:
     name: Build sdist
@@ -224,6 +225,7 @@ jobs:
         with:
           name: rust-sdist
           path: dist
+          compression-level: 0
 
   pypi-publish:
     name: Publish to PyPI
