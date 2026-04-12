@@ -24,22 +24,21 @@ fn headers_js_to_map(headers: JsValue) -> Result<HashMap<String, String>, JsValu
     // Try treating as a Headers object (e.g., fetch Request headers)
     if let Ok(h) = headers.clone().dyn_into::<Headers>() {
         let mut map = HashMap::new();
-        let iter = h.entries();
-        loop {
-            let next = iter.next()?;
-            if next.done() {
-                break;
-            }
-            let pair = Array::from(&next.value());
-            if pair.length() >= 2 {
-                let key = pair.get(0).as_string().unwrap_or_default();
-                let value = pair.get(1).as_string().unwrap_or_default();
-                if !key.is_empty() {
-                    map.insert(key, value);
+        let entries = h.entries();
+        if let Some(mut iter) = js_sys::try_iter(&entries)? {
+            while let Some(item) = iter.next() {
+                let value = item?;
+                let pair = Array::from(&value);
+                if pair.length() >= 2 {
+                    let key = pair.get(0).as_string().unwrap_or_default();
+                    let value = pair.get(1).as_string().unwrap_or_default();
+                    if !key.is_empty() {
+                        map.insert(key, value);
+                    }
                 }
             }
+            return Ok(map);
         }
-        return Ok(map);
     }
 
     // Try treating as a plain object with string values
@@ -74,7 +73,8 @@ fn add_navigator_ua_if_missing(map: &mut HashMap<String, String>) {
 pub fn validate_headers(headers: JsValue) -> Result<JsValue, JsValue> {
     let mut map = headers_js_to_map(headers)?;
     add_navigator_ua_if_missing(&mut map);
-    to_value(&core_validate_headers(&map)).map_err(|e| e.into())
+    to_value(&core_validate_headers_with_config(&map, Some(vec![]), Some(0)))
+        .map_err(|e| e.into())
 }
 
 #[wasm_bindgen]

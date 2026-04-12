@@ -5,6 +5,7 @@ use aiwaf_wasm::{
 use serde_wasm_bindgen::{from_value, to_value};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
+use web_sys::Headers;
 
 
 #[wasm_bindgen_test]
@@ -20,6 +21,29 @@ fn test_validate_headers() {
     let reason = validate_headers(headers).unwrap();
     let opt: Option<String> = from_value(reason).unwrap();
     assert!(opt.is_none());
+}
+
+#[wasm_bindgen_test]
+fn test_validate_headers_with_headers_object() {
+    if web_sys::window().is_none() {
+        // Headers iteration is not reliably supported in wasm-bindgen-test --node.
+        return;
+    }
+    let headers = Headers::new().unwrap();
+    headers.set("user-agent", "Mozilla/5.0").unwrap();
+    headers.set("accept", "text/html").unwrap();
+    headers.set("accept-language", "en-US").unwrap();
+    headers.set("accept-encoding", "gzip, deflate").unwrap();
+    headers.set("connection", "keep-alive").unwrap();
+
+    let reason = validate_headers(JsValue::from(headers)).unwrap();
+    let raw: JsValue = reason.clone();
+    let opt: Option<String> = from_value(reason).unwrap();
+    if opt.is_some() {
+        // Surface the exact reason to help diagnose header conversion issues.
+        let s = raw.as_string().unwrap_or_else(|| "<non-string>".to_string());
+        panic!("unexpected reason: {s}");
+    }
 }
 
 #[wasm_bindgen_test]
