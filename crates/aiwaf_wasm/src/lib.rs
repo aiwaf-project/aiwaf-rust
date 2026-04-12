@@ -13,8 +13,8 @@ use serde_wasm_bindgen::{from_value, to_value};
 use wasm_bindgen::JsCast;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
-use js_sys::{Array, Iterator as JsIterator};
-use web_sys::{Headers, Navigator, Window};
+use js_sys::Array;
+use web_sys::{Headers, Window};
 
 fn headers_js_to_map(headers: JsValue) -> Result<HashMap<String, String>, JsValue> {
     if let Ok(map) = from_value::<HashMap<String, String>>(headers.clone()) {
@@ -22,18 +22,20 @@ fn headers_js_to_map(headers: JsValue) -> Result<HashMap<String, String>, JsValu
     }
 
     // Try treating as a Headers object (e.g., fetch Request headers)
-    if let Ok(h) = headers.dyn_into::<Headers>() {
+    if let Ok(h) = headers.clone().dyn_into::<Headers>() {
         let mut map = HashMap::new();
-        let iter: Option<JsIterator> = js_sys::try_iter(&h)?.map(|it| it.into());
-        if let Some(mut it) = iter {
-            while let Some(item) = it.next() {
-                let pair = Array::from(&item?);
-                if pair.length() >= 2 {
-                    let key = pair.get(0).as_string().unwrap_or_default();
-                    let value = pair.get(1).as_string().unwrap_or_default();
-                    if !key.is_empty() {
-                        map.insert(key, value);
-                    }
+        let iter = h.entries();
+        loop {
+            let next = iter.next()?;
+            if next.done() {
+                break;
+            }
+            let pair = Array::from(&next.value());
+            if pair.length() >= 2 {
+                let key = pair.get(0).as_string().unwrap_or_default();
+                let value = pair.get(1).as_string().unwrap_or_default();
+                if !key.is_empty() {
+                    map.insert(key, value);
                 }
             }
         }
@@ -236,6 +238,7 @@ impl IsolationForest {
         to_value(&state).map_err(|e| e.into())
     }
 
+    #[allow(unused_variables)]
     #[wasm_bindgen(static_method_of = IsolationForest)]
     pub fn from_json(state: JsValue) -> Result<IsolationForest, JsValue> {
         let state: IsolationForestState = from_value(state)?;

@@ -19,3 +19,4 @@ pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38", "macros"
 
 [workspace]
 members = ["crates/aiwaf_core", "crates/aiwaf_wasm"]
+default-members = ["crates/aiwaf_core", "crates/aiwaf_wasm"]

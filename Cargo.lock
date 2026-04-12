@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "aiwaf-wasm"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "aiwaf_core",
  "getrandom",
@@ -23,12 +23,14 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
 name = "aiwaf_core"
 version = "0.1.4"
 dependencies = [
+ "getrandom",
  "once_cell",
  "rand",
  "regex",
@@ -671,6 +673,16 @@ name = "wasm-bindgen-test-shared"
 version = "0.2.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23cda5ecc67248c48d3e705d3e03e00af905769b78b9d2a1678b663b8b9d4472"
+
+[[package]]
+name = "web-sys"
+version = "0.3.95"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f2dfbb17949fa2088e5d39408c48368947b86f7834484e87b73de55bc14d97d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "winapi-util"
