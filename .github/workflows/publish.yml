@@ -176,6 +176,11 @@ jobs:
             python scripts/check_zip_trailing.py "$whl"
             python scripts/wheel_crc_check.py "$whl"
           done
+      - name: Write wheel hashes
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.whl > SHA256SUMS-${{ matrix.os }}-py${{ matrix.python }}.txt
       - name: Verify wheels
         run: |
           python -m pip install -U twine pkginfo
@@ -280,6 +285,10 @@ jobs:
       - name: Verify artifacts
         shell: bash
         run: |
+          for sums in dist/SHA256SUMS-*.txt; do
+            echo "Verifying hashes with $sums"
+            (cd dist && sha256sum -c "$(basename "$sums")")
+          done
           for whl in dist/*.whl; do
             echo "Checking $whl"
             ls -l "$whl"
