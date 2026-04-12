@@ -1,6 +1,6 @@
 [package]
 name = "aiwaf_rust"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "Rust-powered WAF heuristics exposed to Python via PyO3"
 license = "MIT"
