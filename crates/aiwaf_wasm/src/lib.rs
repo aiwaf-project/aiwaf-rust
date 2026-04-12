@@ -13,10 +13,65 @@ use serde_wasm_bindgen::{from_value, to_value};
 use wasm_bindgen::JsCast;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
+use js_sys::{Array, Iterator as JsIterator};
+use web_sys::{Headers, Navigator, Window};
+
+fn headers_js_to_map(headers: JsValue) -> Result<HashMap<String, String>, JsValue> {
+    if let Ok(map) = from_value::<HashMap<String, String>>(headers.clone()) {
+        return Ok(map);
+    }
+
+    // Try treating as a Headers object (e.g., fetch Request headers)
+    if let Ok(h) = headers.dyn_into::<Headers>() {
+        let mut map = HashMap::new();
+        let iter: Option<JsIterator> = js_sys::try_iter(&h)?.map(|it| it.into());
+        if let Some(mut it) = iter {
+            while let Some(item) = it.next() {
+                let pair = Array::from(&item?);
+                if pair.length() >= 2 {
+                    let key = pair.get(0).as_string().unwrap_or_default();
+                    let value = pair.get(1).as_string().unwrap_or_default();
+                    if !key.is_empty() {
+                        map.insert(key, value);
+                    }
+                }
+            }
+        }
+        return Ok(map);
+    }
+
+    // Try treating as a plain object with string values
+    let obj = js_sys::Object::from(headers);
+    let keys = js_sys::Object::keys(&obj);
+    let mut map = HashMap::new();
+    for key in keys.iter() {
+        let k = key.as_string().unwrap_or_default();
+        if k.is_empty() {
+            continue;
+        }
+        let v = js_sys::Reflect::get(&obj, &key).unwrap_or(JsValue::UNDEFINED);
+        let value = v.as_string().unwrap_or_else(|| format!("{v:?}"));
+        map.insert(k, value);
+    }
+    Ok(map)
+}
+
+fn add_navigator_ua_if_missing(map: &mut HashMap<String, String>) {
+    if map.contains_key("user-agent") {
+        return;
+    }
+    let ua = web_sys::window()
+        .and_then(|w: Window| w.navigator().user_agent().ok())
+        .unwrap_or_default();
+    if !ua.is_empty() {
+        map.insert("user-agent".to_string(), ua);
+    }
+}
 
 #[wasm_bindgen]
 pub fn validate_headers(headers: JsValue) -> Result<JsValue, JsValue> {
-    let map: HashMap<String, String> = from_value(headers)?;
+    let mut map = headers_js_to_map(headers)?;
+    add_navigator_ua_if_missing(&mut map);
     to_value(&core_validate_headers(&map)).map_err(|e| e.into())
 }
 
@@ -26,7 +81,8 @@ pub fn validate_headers_with_config(
     required_headers: JsValue,
     min_score: JsValue,
 ) -> Result<JsValue, JsValue> {
-    let map: HashMap<String, String> = from_value(headers)?;
+    let mut map = headers_js_to_map(headers)?;
+    add_navigator_ua_if_missing(&mut map);
     let required: Option<Vec<String>> = if required_headers.is_null() || required_headers.is_undefined() {
         None
     } else {

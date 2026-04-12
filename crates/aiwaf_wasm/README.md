@@ -3,7 +3,7 @@
 Rust-powered WAF heuristics compiled to WebAssembly. Provides fast, deterministic
 feature extraction and anomaly scoring in browsers and Node.
 
-Version: `0.1.3`
+Version: `0.1.4`
 
 ## Install
 
@@ -45,6 +45,39 @@ const model = new AiwafIsolationForest(100, 256, 0.5, 42);
 model.fit([[0.1, 0.2, 0.3], [0.2, 0.1, 0.4]]);
 console.log(model.anomaly_score([0.3, 0.2, 0.1]));
 ```
+
+## API Reference
+
+### Header Validation
+
+- `validate_headers(headers: Record<string, string> | Headers) -> string | null`  
+  Accepts a plain object or a `Headers` instance.  
+  Returns `null` when OK, otherwise a reason string.  
+  In browsers, if `user-agent` is missing, it is filled from `navigator.userAgent`.
+
+- `validate_headers_with_config(headers, requiredHeaders: string[] | null, minScore: number | null) -> string | null`
+
+### Feature Extraction
+
+- `extract_features(records: Array<Record>, staticKeywords: string[]) -> Array<Record>`
+- `extract_features_batch_with_state(records, staticKeywords, state?) -> { features: Array<Record>, state: object }`
+- `finalize_feature_state() -> { features: Array<Record>, state: object }`
+
+### Behavior Analysis
+
+- `analyze_recent_behavior(entries: Array<Record>, staticKeywords: string[]) -> object | null`
+
+### Isolation Forest
+
+- `new IsolationForest(config?: object)`
+- `fit(data: number[][]): void`
+- `retrain(data: number[][]): void`
+- `anomaly_score(point: number[]): number`
+- `score_samples(data: number[][]): number[]`
+- `decision_function(data: number[][]): number[]`
+- `predict(data: number[][]): number[]`
+- `to_json(): object`
+- `IsolationForest.from_json(state: object): IsolationForest`
 
 ## Notes
 

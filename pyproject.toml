@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "aiwaf-rust"
-version = "0.1.3"
+version = "0.1.4"
 description = "Rust-powered WAF heuristics exposed to Python via PyO3"
 readme = "README_PYPI.md"
 requires-python = ">=3.8"

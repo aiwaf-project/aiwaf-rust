@@ -7,7 +7,7 @@
 - Built with: `PyO3` + `maturin`
 - WASM package: `aiwaf-wasm` (npm)
 - Built with: `wasm-bindgen` + `wasm-pack`
-- Version: `0.1.3`
+- Version: `0.1.4`
 
 ## Features
 
@@ -34,6 +34,56 @@ maturin develop
 ```
 
 ## Python API
+
+### Function Reference
+
+**Header Validation**
+
+- `validate_headers(headers: dict[str, str]) -> Optional[str]`  
+  Expects a dict of header names to values. Accepts either `HTTP_*` style keys
+  (e.g., `HTTP_USER_AGENT`) or standard header names (e.g., `user-agent`).  
+  Returns `None` when the headers look acceptable, otherwise a short reason string.
+
+- `validate_headers_with_config(headers: dict[str, str], required_headers: list[str], min_score: int) -> Optional[str]`  
+  `required_headers` can be empty to disable required-header checks.  
+  `min_score` is the header quality threshold (set `0` to disable).  
+  Returns `None` or a reason string.
+
+**Feature Extraction**
+
+- `extract_features(records: list[dict], static_keywords: list[str]) -> list[dict]`  
+  Each record expects:  
+  `ip` (str), `path_lower` (str), `path_len` (int), `timestamp` (float),  
+  `response_time` (float), `status_idx` (int), `kw_check` (bool), `total_404` (int).  
+  Returns a list of feature dicts (includes `kw_hits`, `rate`, `burst_score`, etc.).
+
+- `extract_features_batch_with_state(records: list[dict], static_keywords: list[str], state: Optional[dict]) -> dict`  
+  Returns `{"features": [...], "state": {...}}` to allow incremental batches.
+
+- `finalize_feature_state() -> dict`  
+  Returns an empty feature batch with a reset state.
+
+**Behavior Analysis**
+
+- `analyze_recent_behavior(entries: list[dict], static_keywords: list[str]) -> Optional[dict]`  
+  Each entry expects: `path_lower` (str), `timestamp` (float), `status` (int), `kw_check` (bool).  
+  Returns `None` or a dict like `{"should_block": bool, "reason": str, ...}`.
+
+**Isolation Forest**
+
+- `IsolationForest(...)` constructor parameters:  
+  `n_estimators` (int), `max_samples` ("auto"|int|float), `contamination` ("auto"|float),  
+  `max_features` (float), `bootstrap` (bool), `random_state` (int|None), `warm_start` (bool).
+
+- Methods:  
+  `fit(data: list[list[float]]) -> None`  
+  `retrain(data: list[list[float]]) -> None`  
+  `anomaly_score(point: list[float]) -> float`  
+  `score_samples(data: list[list[float]]) -> list[float]`  
+  `decision_function(data: list[list[float]]) -> list[float]`  
+  `predict(data: list[list[float]]) -> list[int]` (1 = inlier, -1 = outlier)  
+  `to_json() -> dict`  
+  `IsolationForest.from_json(state: dict) -> IsolationForest`
 
 ```python
 import aiwaf_rust
@@ -140,6 +190,39 @@ const state = forest.to_json();
 const forest2 = IsolationForest.from_json(state);
 forest2.retrain([[0.15, 1.05], [0.25, 1.2]]);
 ```
+
+### WASM Function Reference
+
+**Header Validation**
+
+- `validate_headers(headers: Record<string, string> | Headers) -> string | null`  
+  Accepts a plain object or a `Headers` instance.  
+  Returns `null` when OK, otherwise a reason string.  
+  In browsers, if `user-agent` is missing, it is filled from `navigator.userAgent`.
+
+- `validate_headers_with_config(headers, requiredHeaders: string[] | null, minScore: number | null) -> string | null`
+
+**Feature Extraction**
+
+- `extract_features(records: Array<Record>, staticKeywords: string[]) -> Array<Record>`
+- `extract_features_batch_with_state(records, staticKeywords, state?) -> { features: Array<Record>, state: object }`
+- `finalize_feature_state() -> { features: Array<Record>, state: object }`
+
+**Behavior Analysis**
+
+- `analyze_recent_behavior(entries: Array<Record>, staticKeywords: string[]) -> object | null`
+
+**Isolation Forest**
+
+- `new IsolationForest(config?: object)`
+- `fit(data: number[][]): void`
+- `retrain(data: number[][]): void`
+- `anomaly_score(point: number[]): number`
+- `score_samples(data: number[][]): number[]`
+- `decision_function(data: number[][]): number[]`
+- `predict(data: number[][]): number[]`
+- `to_json(): object`
+- `IsolationForest.from_json(state: object): IsolationForest`
 
 ## Isolation Forest Details
 
