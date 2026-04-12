@@ -304,6 +304,11 @@ jobs:
           python -m pip install -U twine pkginfo
           twine check dist/*.whl
           python -m tarfile -t dist/*.tar.gz
+      - name: Move checksum files out of dist
+        shell: bash
+        run: |
+          mkdir -p dist_checksums
+          mv dist/SHA256SUMS-*.txt dist_checksums/ 2>/dev/null || true
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
