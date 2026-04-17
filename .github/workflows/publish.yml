@@ -79,43 +79,49 @@ jobs:
           - os: ubuntu-latest
             python: "3.12"
             platform_id: manylinux2014-x86_64
-            wheel_args: "--target x86_64-unknown-linux-gnu --manylinux 2014"
+            target: x86_64
+            manylinux: "2014"
+            wheel_args: ""
             build_jobs: ""
             rustflags: ""
           - os: ubuntu-24.04-arm
             python: "3.12"
             platform_id: manylinux2014-aarch64
-            wheel_args: "--target aarch64-unknown-linux-gnu --manylinux 2014"
-            build_jobs: ""
-            rustflags: ""
-          - os: ubuntu-latest
-            python: "3.12"
-            platform_id: manylinux2014-i686
-            wheel_args: "--target i686-unknown-linux-gnu --manylinux 2014"
+            target: aarch64
+            manylinux: "2014"
+            wheel_args: ""
             build_jobs: ""
             rustflags: ""
           - os: ubuntu-latest
             python: "3.12"
             platform_id: musllinux_1_2-x86_64
-            wheel_args: "--target x86_64-unknown-linux-musl --compatibility musllinux_1_2"
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            wheel_args: ""
+            build_jobs: ""
+            rustflags: ""
+          - os: macos-13
+            python: "3.12"
+            platform_id: macos-x86_64
+            target: x86_64-apple-darwin
+            manylinux: "off"
+            wheel_args: ""
             build_jobs: ""
             rustflags: ""
           - os: macos-14
             python: "3.12"
-            platform_id: macos-universal2
-            wheel_args: "--universal2"
+            platform_id: macos-arm64
+            target: aarch64-apple-darwin
+            manylinux: "off"
+            wheel_args: ""
             build_jobs: ""
             rustflags: ""
           - os: windows-latest
             python: "3.12"
             platform_id: win-amd64
-            wheel_args: "--target x86_64-pc-windows-msvc"
-            build_jobs: 1
-            rustflags: "-C codegen-units=1"
-          - os: windows-latest
-            python: "3.12"
-            platform_id: win-arm64
-            wheel_args: "--target aarch64-pc-windows-msvc"
+            target: x86_64-pc-windows-msvc
+            manylinux: "off"
+            wheel_args: ""
             build_jobs: 1
             rustflags: "-C codegen-units=1"
 
@@ -131,8 +137,21 @@ jobs:
         shell: bash
         run: rm -rf dist
 
-      - name: Build wheel
-        if: matrix.os != 'windows-latest'
+      - name: Build wheel (Linux container mode)
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: 0
+          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}-${{ matrix.platform_id }}
+        with:
+          command: build
+          args: --release --out dist ${{ matrix.wheel_args }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          maturin-version: "1.7.4"
+          sccache: false
+      - name: Build wheel (macOS)
+        if: matrix.os == 'macos-13' || matrix.os == 'macos-14'
         uses: PyO3/maturin-action@v1
         env:
           CARGO_INCREMENTAL: 0
@@ -142,6 +161,8 @@ jobs:
         with:
           command: build
           args: --release --out dist --interpreter ${{ steps.setup-python.outputs.python-path }} ${{ matrix.wheel_args }}
+          target: ${{ matrix.target }}
+          manylinux: off
           maturin-version: "1.7.4"
           sccache: false
       - name: Build wheel (Windows single job)
@@ -157,16 +178,19 @@ jobs:
         with:
           command: build
           args: --release --out dist --interpreter ${{ steps.setup-python.outputs.python-path }} ${{ matrix.wheel_args }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
           maturin-version: "1.7.4"
           sccache: false
       - name: Install maturin CLI (for retries)
         run: python -m pip install -U maturin
       - name: Rebuild if CRC check fails
+        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         shell: bash
         run: |
           max_attempts=3
           attempt=1
-          extra_maturin_args="${{ matrix.wheel_args }}"
+          extra_maturin_args="--target ${{ matrix.target }} ${{ matrix.wheel_args }}"
           while true; do
             if python scripts/wheel_crc_check.py dist/*.whl; then
               break
