@@ -100,18 +100,18 @@ jobs:
             wheel_args: ""
             build_jobs: ""
             rustflags: ""
-          - os: macos-13
+          - os: macos-14
             python: "3.12"
-            platform_id: macos-x86_64
-            target: x86_64-apple-darwin
+            platform_id: macos-arm64
+            target: aarch64-apple-darwin
             manylinux: "off"
             wheel_args: ""
             build_jobs: ""
             rustflags: ""
           - os: macos-14
             python: "3.12"
-            platform_id: macos-arm64
-            target: aarch64-apple-darwin
+            platform_id: macos-x86_64
+            target: x86_64-apple-darwin
             manylinux: "off"
             wheel_args: ""
             build_jobs: ""
@@ -151,7 +151,7 @@ jobs:
           maturin-version: "1.7.4"
           sccache: false
       - name: Build wheel (macOS)
-        if: matrix.os == 'macos-13' || matrix.os == 'macos-14'
+        if: matrix.os == 'macos-14'
         uses: PyO3/maturin-action@v1
         env:
           CARGO_INCREMENTAL: 0
