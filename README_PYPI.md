@@ -40,7 +40,7 @@ print(model.anomaly_score([0.3, 0.2, 0.1]))
 
 ## Notes
 
-- Built with PyO3 and `abi3` so a single wheel works on Python 3.8+.
+- Built with PyO3 and `abi3` so a single wheel works on Python 3.8+ (including 3.12+).
 - The WASM package is published as `aiwaf-wasm` on npm.
 
 ## License

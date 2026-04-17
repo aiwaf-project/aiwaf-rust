@@ -7,7 +7,7 @@
 - Built with: `PyO3` + `maturin`
 - WASM package: `aiwaf-wasm` (npm)
 - Built with: `wasm-bindgen` + `wasm-pack`
-- Version: `0.1.7`
+- Version: `0.1.8`
 
 ## Features
 
@@ -285,7 +285,7 @@ Trigger conditions:
 - `workflow_dispatch`
 
 The workflow builds:
-- Wheels for Python `3.8` to `3.12` on `ubuntu-latest`, `macos-latest`, `windows-latest`
+- ABI3 wheels compatible with Python `3.8+` (including `3.12+`) on `ubuntu-latest`, `macos-latest`, `windows-latest`
 - One source distribution (`sdist`)
 
 Then it publishes to PyPI using:
