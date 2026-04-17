@@ -7,7 +7,7 @@
 - Built with: `PyO3` + `maturin`
 - WASM package: `aiwaf-wasm` (npm)
 - Built with: `wasm-bindgen` + `wasm-pack`
-- Version: `0.1.8`
+- Version: `0.1.9`
 
 ## Features
 

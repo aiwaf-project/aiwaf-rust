@@ -69,24 +69,55 @@ jobs:
           path: crates/aiwaf_wasm/pkg
 
   build-wheels:
-    name: Build wheels (${{ matrix.os }} / py${{ matrix.python }})
+    name: Build wheels (${{ matrix.os }} / ${{ matrix.platform_id }})
     runs-on: ${{ matrix.os }}
     needs: [test-core, test-python]
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.12"]
         include:
+          - os: ubuntu-latest
+            python: "3.12"
+            platform_id: manylinux2014-x86_64
+            wheel_args: "--target x86_64-unknown-linux-gnu --manylinux 2014"
+            build_jobs: ""
+            rustflags: ""
+          - os: ubuntu-24.04-arm
+            python: "3.12"
+            platform_id: manylinux2014-aarch64
+            wheel_args: "--target aarch64-unknown-linux-gnu --manylinux 2014"
+            build_jobs: ""
+            rustflags: ""
+          - os: ubuntu-latest
+            python: "3.12"
+            platform_id: manylinux2014-i686
+            wheel_args: "--target i686-unknown-linux-gnu --manylinux 2014"
+            build_jobs: ""
+            rustflags: ""
+          - os: ubuntu-latest
+            python: "3.12"
+            platform_id: musllinux_1_2-x86_64
+            wheel_args: "--target x86_64-unknown-linux-musl --compatibility musllinux_1_2"
+            build_jobs: ""
+            rustflags: ""
+          - os: macos-14
+            python: "3.12"
+            platform_id: macos-universal2
+            wheel_args: "--universal2"
+            build_jobs: ""
+            rustflags: ""
           - os: windows-latest
+            python: "3.12"
+            platform_id: win-amd64
+            wheel_args: "--target x86_64-pc-windows-msvc"
             build_jobs: 1
             rustflags: "-C codegen-units=1"
-          - os: ubuntu-latest
-            build_jobs: ""
-            rustflags: ""
-          - os: macos-latest
-            build_jobs: ""
-            rustflags: ""
+          - os: windows-latest
+            python: "3.12"
+            platform_id: win-arm64
+            wheel_args: "--target aarch64-pc-windows-msvc"
+            build_jobs: 1
+            rustflags: "-C codegen-units=1"
 
     steps:
       - uses: actions/checkout@v4
@@ -105,12 +136,12 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           CARGO_INCREMENTAL: 0
-          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
+          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}-${{ matrix.platform_id }}
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
           command: build
-          args: --release --out dist --interpreter ${{ steps.setup-python.outputs.python-path }}
+          args: --release --out dist --interpreter ${{ steps.setup-python.outputs.python-path }} ${{ matrix.wheel_args }}
           maturin-version: "1.7.4"
           sccache: false
       - name: Build wheel (Windows single job)
@@ -118,14 +149,14 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           CARGO_INCREMENTAL: 0
-          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}
+          CARGO_TARGET_DIR: target/${{ matrix.os }}-${{ matrix.python }}-${{ matrix.platform_id }}
           CARGO_BUILD_JOBS: 1
           RUSTFLAGS: -C codegen-units=1
           PYTHON_SYS_EXECUTABLE: ${{ steps.setup-python.outputs.python-path }}
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
         with:
           command: build
-          args: --release --out dist --interpreter ${{ steps.setup-python.outputs.python-path }}
+          args: --release --out dist --interpreter ${{ steps.setup-python.outputs.python-path }} ${{ matrix.wheel_args }}
           maturin-version: "1.7.4"
           sccache: false
       - name: Install maturin CLI (for retries)
@@ -135,6 +166,7 @@ jobs:
         run: |
           max_attempts=3
           attempt=1
+          extra_maturin_args="${{ matrix.wheel_args }}"
           while true; do
             if python scripts/wheel_crc_check.py dist/*.whl; then
               break
@@ -145,8 +177,8 @@ jobs:
             fi
             attempt=$((attempt + 1))
             echo "CRC failure detected, rebuilding wheels (attempt $attempt/$max_attempts)..."
-            rm -rf dist "target/${{ matrix.os }}-${{ matrix.python }}" "target/retry-${{ matrix.os }}-${{ matrix.python }}-${attempt}"
-            CARGO_TARGET_DIR="target/retry-${{ matrix.os }}-${{ matrix.python }}-${attempt}" maturin build --release --out dist --interpreter "${PYTHON_SYS_EXECUTABLE}"
+            rm -rf dist "target/${{ matrix.os }}-${{ matrix.python }}-${{ matrix.platform_id }}" "target/retry-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.platform_id }}-${attempt}"
+            CARGO_TARGET_DIR="target/retry-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.platform_id }}-${attempt}" maturin build --release --out dist --interpreter "${PYTHON_SYS_EXECUTABLE}" ${extra_maturin_args}
           done
       - name: Inspect wheels (pre-normalize)
         shell: bash
@@ -184,7 +216,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          sha256sum *.whl > SHA256SUMS-${{ matrix.os }}.txt
+          sha256sum *.whl > SHA256SUMS-${{ matrix.os }}-${{ matrix.platform_id }}.txt
       - name: Verify wheels
         run: |
           python -m pip install -U twine pkginfo
@@ -193,7 +225,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: rust-wheels-${{ matrix.os }}-py${{ matrix.python }}
+          name: rust-wheels-${{ matrix.os }}-${{ matrix.platform_id }}
           path: dist
           compression-level: 0
 
@@ -227,6 +259,7 @@ jobs:
           done
       - name: Verify sdist
         run: |
+          ls -1 dist/*.tar.gz >/dev/null
           python -m tarfile -t dist/*.tar.gz
 
       - name: Upload sdist
@@ -278,6 +311,7 @@ jobs:
       - name: Verify artifacts
         shell: bash
         run: |
+          ls -1 dist/*.tar.gz >/dev/null
           for sums in dist/SHA256SUMS-*.txt; do
             echo "Verifying hashes with $sums"
             (cd dist && sha256sum -c "$(basename "$sums")")
